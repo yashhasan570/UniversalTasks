@@ -1,0 +1,621 @@
+// Universal Tasks is a to-do list application to facilitate your life.
+// Copyright 2018-present Universal Tasks and contributors. All rights reserved.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+package models
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"code.universaltasks.io/api/pkg/db"
+	"code.universaltasks.io/api/pkg/events"
+	"code.universaltasks.io/api/pkg/user"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"xorm.io/xorm"
+)
+
+func TestTaskRelation_Create(t *testing.T) {
+	t.Run("Normal", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		err = s.Commit()
+		require.NoError(t, err)
+		db.AssertExists(t, "task_relations", map[string]interface{}{
+			"task_id":       1,
+			"other_task_id": 2,
+			"relation_kind": RelationKindSubtask,
+			"created_by_id": 1,
+		}, false)
+	})
+	t.Run("link share is the event doer", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+		events.ClearDispatchedEvents()
+
+		share := &LinkSharing{
+			ID:         2,
+			ProjectID:  1,
+			Permission: PermissionWrite,
+		}
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindSubtask,
+		}
+		require.NoError(t, rel.Create(s, share))
+		require.NoError(t, s.Commit())
+		events.DispatchPending(context.Background(), s)
+
+		dispatched := events.GetDispatchedEvents((&TaskRelationCreatedEvent{}).Name())
+		require.Len(t, dispatched, 1)
+		doer := dispatched[0].(*TaskRelationCreatedEvent).Doer
+		require.NotNil(t, doer)
+		assert.Equal(t, share.GetID(), doer.ID)
+	})
+	t.Run("Two Tasks In Different Projects", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  32,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		err = s.Commit()
+		require.NoError(t, err)
+		db.AssertExists(t, "task_relations", map[string]interface{}{
+			"task_id":       1,
+			"other_task_id": 32,
+			"relation_kind": RelationKindSubtask,
+			"created_by_id": 1,
+		}, false)
+	})
+	t.Run("Already Existing", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  29,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrRelationAlreadyExists(err))
+	})
+	t.Run("Same Task", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:      1,
+			OtherTaskID: 1,
+		}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrRelationTasksCannotBeTheSame(err))
+	})
+	t.Run("cycle with one subtask", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       29,
+			OtherTaskID:  1,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+	})
+	t.Run("cycle with multiple subtasks", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel1 := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel1.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel2 := TaskRelation{
+			TaskID:       2,
+			OtherTaskID:  3,
+			RelationKind: RelationKindSubtask,
+		}
+		err = rel2.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel3 := TaskRelation{
+			TaskID:       3,
+			OtherTaskID:  4,
+			RelationKind: RelationKindSubtask,
+		}
+		err = rel3.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+
+		// Cycle happens here
+		rel4 := TaskRelation{
+			TaskID:       4,
+			OtherTaskID:  2,
+			RelationKind: RelationKindSubtask,
+		}
+		err = rel4.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+	})
+	t.Run("cycle with multiple subtasks tasks and relation back to parent", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel1 := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel1.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel2 := TaskRelation{
+			TaskID:       2,
+			OtherTaskID:  3,
+			RelationKind: RelationKindSubtask,
+		}
+		err = rel2.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel3 := TaskRelation{
+			TaskID:       3,
+			OtherTaskID:  4,
+			RelationKind: RelationKindSubtask,
+		}
+		err = rel3.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+
+		// Cycle happens here
+		rel4 := TaskRelation{
+			TaskID:       4,
+			OtherTaskID:  1,
+			RelationKind: RelationKindSubtask,
+		}
+		err = rel4.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+	})
+	t.Run("hierarchy too large to check", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		previous := maxTaskRelationCycleCheckVisits
+		maxTaskRelationCycleCheckVisits = 2
+		t.Cleanup(func() { maxTaskRelationCycleCheckVisits = previous })
+
+		for _, pair := range [][2]int64{{1, 2}, {2, 3}} {
+			rel := TaskRelation{TaskID: pair[0], OtherTaskID: pair[1], RelationKind: RelationKindSubtask}
+			require.NoError(t, rel.Create(s, &user.User{ID: 1}))
+		}
+
+		rel := TaskRelation{TaskID: 3, OtherTaskID: 4, RelationKind: RelationKindSubtask}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.Equal(t, ErrTaskRelationHierarchyTooLarge{TaskID: 1, MaxTasks: 2}, err)
+	})
+	t.Run("cycle with one parenttask", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  29,
+			RelationKind: RelationKindParenttask,
+		}
+		err := rel.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+	})
+	t.Run("cycle with multiple parenttasks", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel1 := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindParenttask,
+		}
+		err := rel1.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel2 := TaskRelation{
+			TaskID:       2,
+			OtherTaskID:  3,
+			RelationKind: RelationKindParenttask,
+		}
+		err = rel2.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel3 := TaskRelation{
+			TaskID:       3,
+			OtherTaskID:  4,
+			RelationKind: RelationKindParenttask,
+		}
+		err = rel3.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+
+		// Cycle happens here
+		rel4 := TaskRelation{
+			TaskID:       4,
+			OtherTaskID:  2,
+			RelationKind: RelationKindParenttask,
+		}
+		err = rel4.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+	})
+	t.Run("cycle with multiple parenttasks and relation back to parent", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel1 := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindParenttask,
+		}
+		err := rel1.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel2 := TaskRelation{
+			TaskID:       2,
+			OtherTaskID:  3,
+			RelationKind: RelationKindParenttask,
+		}
+		err = rel2.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		rel3 := TaskRelation{
+			TaskID:       3,
+			OtherTaskID:  4,
+			RelationKind: RelationKindParenttask,
+		}
+		err = rel3.Create(s, &user.User{ID: 1})
+		require.NoError(t, err)
+
+		// Cycle happens here
+		rel4 := TaskRelation{
+			TaskID:       4,
+			OtherTaskID:  1,
+			RelationKind: RelationKindParenttask,
+		}
+		err = rel4.Create(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+	})
+}
+
+func TestCreateTaskRelationsForImport(t *testing.T) {
+	doer := &user.User{ID: 1}
+	importTasks := func(t *testing.T, s *xorm.Session, count int) []*Task {
+		tasks := make([]*Task, count)
+		for i := range tasks {
+			tasks[i] = &Task{Title: fmt.Sprintf("imported %d", i), RelatedTasks: RelatedTaskMap{}}
+		}
+		require.NoError(t, CreateTasksForImport(s, 1, tasks, doer))
+		return tasks
+	}
+	relate := func(task *Task, kind RelationKind, other *Task) {
+		task.RelatedTasks[kind] = append(task.RelatedTasks[kind], other)
+	}
+
+	t.Run("long chain is not limited by the cycle check cap", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		previous := maxTaskRelationCycleCheckVisits
+		maxTaskRelationCycleCheckVisits = 2
+		t.Cleanup(func() { maxTaskRelationCycleCheckVisits = previous })
+
+		tasks := importTasks(t, s, 4)
+		relate(tasks[0], RelationKindSubtask, tasks[1])
+		relate(tasks[1], RelationKindSubtask, tasks[2])
+		relate(tasks[3], RelationKindParenttask, tasks[2])
+		relate(tasks[2], RelationKindSubtask, tasks[3])
+		relate(tasks[0], RelationKindRelated, tasks[3])
+
+		require.NoError(t, CreateTaskRelationsForImport(s, tasks, doer))
+		require.NoError(t, s.Commit())
+
+		db.AssertExists(t, "task_relations", map[string]interface{}{
+			"task_id":       tasks[2].ID,
+			"other_task_id": tasks[3].ID,
+			"relation_kind": RelationKindSubtask,
+		}, false)
+		db.AssertExists(t, "task_relations", map[string]interface{}{
+			"task_id":       tasks[3].ID,
+			"other_task_id": tasks[2].ID,
+			"relation_kind": RelationKindParenttask,
+		}, false)
+	})
+	t.Run("cycle", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		tasks := importTasks(t, s, 3)
+		relate(tasks[0], RelationKindSubtask, tasks[1])
+		relate(tasks[1], RelationKindSubtask, tasks[2])
+		relate(tasks[0], RelationKindParenttask, tasks[2])
+
+		err := CreateTaskRelationsForImport(s, tasks, doer)
+		require.Error(t, err)
+		assert.True(t, IsErrTaskRelationCycle(err))
+		require.NoError(t, s.Commit())
+		db.AssertMissing(t, "task_relations", map[string]interface{}{
+			"task_id":       tasks[0].ID,
+			"other_task_id": tasks[1].ID,
+		})
+	})
+	t.Run("related task outside the batch", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		tasks := importTasks(t, s, 2)
+		relate(tasks[0], RelationKindSubtask, tasks[1])
+		relate(tasks[1], RelationKindSubtask, &Task{ID: 1})
+
+		err := CreateTaskRelationsForImport(s, tasks, doer)
+		require.Error(t, err)
+		assert.False(t, IsErrTaskRelationCycle(err))
+		require.NoError(t, s.Commit())
+		db.AssertMissing(t, "task_relations", map[string]interface{}{
+			"task_id": tasks[0].ID,
+		})
+	})
+}
+
+func TestTaskRelation_Delete(t *testing.T) {
+	u := &user.User{ID: 1}
+
+	t.Run("Normal", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  29,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel.Delete(s, u)
+		require.NoError(t, err)
+		err = s.Commit()
+		require.NoError(t, err)
+		db.AssertMissing(t, "task_relations", map[string]interface{}{
+			"task_id":       1,
+			"other_task_id": 29,
+			"relation_kind": RelationKindSubtask,
+		})
+		db.AssertMissing(t, "task_relations", map[string]interface{}{
+			"task_id":       29,
+			"other_task_id": 1,
+			"relation_kind": RelationKindParenttask,
+		})
+	})
+	t.Run("link share is the event doer", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+		events.ClearDispatchedEvents()
+
+		share := &LinkSharing{
+			ID:         2,
+			ProjectID:  1,
+			Permission: PermissionWrite,
+		}
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  29,
+			RelationKind: RelationKindSubtask,
+		}
+		require.NoError(t, rel.Delete(s, share))
+		require.NoError(t, s.Commit())
+		events.DispatchPending(context.Background(), s)
+
+		dispatched := events.GetDispatchedEvents((&TaskRelationDeletedEvent{}).Name())
+		require.Len(t, dispatched, 1)
+		doer := dispatched[0].(*TaskRelationDeletedEvent).Doer
+		require.NotNil(t, doer)
+		assert.Equal(t, share.GetID(), doer.ID)
+	})
+	t.Run("Not existing", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       9999,
+			OtherTaskID:  3,
+			RelationKind: RelationKindSubtask,
+		}
+		err := rel.Delete(s, u)
+		require.Error(t, err)
+		assert.True(t, IsErrRelationDoesNotExist(err))
+	})
+}
+
+func TestTaskRelation_CanDelete(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+
+	u1 := &user.User{ID: 1}
+	u2 := &user.User{ID: 2}
+
+	sharedProject := &Project{Title: "CanDelete shared project"}
+	require.NoError(t, sharedProject.Create(s, u1))
+	_, err := s.Insert(&ProjectUser{UserID: u2.ID, ProjectID: sharedProject.ID, Permission: PermissionWrite})
+	require.NoError(t, err)
+
+	baseTask := &Task{Title: "CanDelete base", ProjectID: sharedProject.ID}
+	require.NoError(t, baseTask.Create(s, u1))
+
+	privateProject := &Project{Title: "CanDelete private project"}
+	require.NoError(t, privateProject.Create(s, u1))
+	otherTask := &Task{Title: "CanDelete other", ProjectID: privateProject.ID}
+	require.NoError(t, otherTask.Create(s, u1))
+
+	rel := &TaskRelation{
+		TaskID:       baseTask.ID,
+		OtherTaskID:  otherTask.ID,
+		RelationKind: RelationKindSubtask,
+	}
+	require.NoError(t, rel.Create(s, u1))
+	require.NoError(t, s.Commit())
+
+	t.Run("writer without access to the other task", func(t *testing.T) {
+		can, err := rel.CanDelete(s, u2)
+		require.NoError(t, err)
+		require.False(t, can, "deleting a relation to a task the caller cannot read must be denied")
+	})
+
+	t.Run("writer with access to both tasks", func(t *testing.T) {
+		can, err := rel.CanDelete(s, u1)
+		require.NoError(t, err)
+		require.True(t, can)
+	})
+}
+
+func TestTaskRelation_CanCreate(t *testing.T) {
+	t.Run("Normal", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  2,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		assert.True(t, can)
+	})
+	t.Run("Two tasks on different projects", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  32,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		assert.True(t, can)
+	})
+	t.Run("No update permissions on base task", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       14,
+			OtherTaskID:  1,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		assert.False(t, can)
+	})
+	t.Run("No update permissions on base task, but read permissions", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       15,
+			OtherTaskID:  1,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		assert.False(t, can)
+	})
+	t.Run("No read permissions on other task", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  14,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.NoError(t, err)
+		assert.False(t, can)
+	})
+	t.Run("Nonexisting base task", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       999999,
+			OtherTaskID:  1,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskDoesNotExist(err))
+		assert.False(t, can)
+	})
+	t.Run("Nonexisting other task", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		rel := TaskRelation{
+			TaskID:       1,
+			OtherTaskID:  999999,
+			RelationKind: RelationKindSubtask,
+		}
+		can, err := rel.CanCreate(s, &user.User{ID: 1})
+		require.Error(t, err)
+		assert.True(t, IsErrTaskDoesNotExist(err))
+		assert.False(t, can)
+	})
+}

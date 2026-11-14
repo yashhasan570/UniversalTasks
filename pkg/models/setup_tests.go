@@ -1,0 +1,100 @@
+// Universal Tasks is a to-do list application to facilitate your life.
+// Copyright 2018-present Universal Tasks and contributors. All rights reserved.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+package models
+
+import (
+	"sync"
+
+	_ "code.universaltasks.io/api/pkg/config" // To trigger its init() which initializes the config
+	"code.universaltasks.io/api/pkg/db"
+	"code.universaltasks.io/api/pkg/log"
+	"code.universaltasks.io/api/pkg/mail"
+	"code.universaltasks.io/api/pkg/notifications"
+)
+
+var syncTestTables sync.Once
+
+// SetupTests takes care of seting up the db, fixtures etc.
+// This is an extra function to be able to call the fixtures setup from the web tests.
+func SetupTests() {
+	var err error
+	x, err = db.CreateTestEngine()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	syncTestTables.Do(func() {
+		tables := []interface{}{}
+		tables = append(tables, GetTables()...)
+		tables = append(tables, notifications.GetTables()...)
+
+		if err := x.Sync2(tables...); err != nil {
+			log.Fatal(err)
+		}
+
+		if err := db.CreateParadeDBIndexes(); err != nil {
+			log.Fatal(err)
+		}
+	})
+
+	err = db.InitTestFixtures(
+		"files",
+		"label_tasks",
+		"labels",
+		"link_shares",
+		"projects",
+		"project_ancestors",
+		"project_task_counters",
+		"task_index_aliases",
+		"task_assignees",
+		"task_attachments",
+		"task_comments",
+		"task_relations",
+		"task_reminders",
+		"tasks",
+		"time_entries",
+		"team_projects",
+		"team_members",
+		"teams",
+		"users",
+		"user_tokens",
+		"user_invite_links",
+		"user_invite_link_teams",
+		"users_projects",
+		"buckets",
+		"saved_filters",
+		"subscriptions",
+		"favorites",
+		"api_tokens",
+		"reactions",
+		"project_views",
+		"task_positions",
+		"task_buckets",
+		"sessions",
+		"webhooks",
+		"totp",
+		"oauth_codes",
+		"user_identities",
+		"notifications",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Start the pseudo mail queue
+	mail.StartMailDaemon()
+}

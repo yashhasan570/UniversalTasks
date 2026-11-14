@@ -1,0 +1,13 @@
+Origin: dl.universaltasks.io
+Label: Universal Tasks
+Codename: stable
+Architectures: amd64 arm64 armhf
+Components: main
+Description: The Universal Tasks package repository.
+
+Origin: dl.universaltasks.io
+Label: Universal Tasks
+Codename: unstable
+Architectures: amd64 arm64 armhf
+Components: main
+Description: The Universal Tasks unstable package repository.

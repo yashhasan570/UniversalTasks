@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+
+command="/usr/local/bin/universaltasks"
+command_background=true
+pidfile="/run/universaltasks.pid"
+directory="/opt/universaltasks"
+description="Universal Tasks service"
+
+depend() {
+    need net
+}
+
+start_pre() {
+    checkpath --directory /run
+}

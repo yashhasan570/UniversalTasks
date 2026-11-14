@@ -1,0 +1,48 @@
+name: "universaltasks"
+arch: "<arch>"
+platform: "linux"
+version: "<version>"
+description: "Universal Tasks is an open-source todo application, written in Go. It lets you create lists,tasks and share them via teams or directly between users."
+maintainer: "Universal Tasks Maintainers <maintainers@universaltasks.io>"
+homepage: "https://universaltasks.io"
+section: "default"
+priority: "extra"
+license: "AGPLv3"
+depends:
+  - systemd
+rpm:
+  signature:
+    key_file: ${NFPM_GPG_KEY_FILE}
+# apk and archlinux run `scripts.postinstall` on a fresh install only — nfpm
+# maps their upgrade hooks from these packager-specific keys instead. Without
+# them, upgrading on Alpine or Arch runs no maintainer script at all.
+apk:
+  scripts:
+    postupgrade: ./build/after-install-openrc.sh
+archlinux:
+  scripts:
+    postupgrade: ./build/after-install.sh
+overrides:
+  apk:
+    depends:
+      - openrc
+    scripts:
+      postinstall: ./build/after-install-openrc.sh
+contents:
+  - src: <binlocation>
+    dst: /opt/universaltasks/universaltasks
+  - src: ./config.yml.sample
+    dst: /etc/universaltasks/config.yml
+    # noreplace only affects rpm; the other packagers treat it as plain config.
+    type: "config|noreplace"
+  - src: /opt/universaltasks/universaltasks
+    dst: /usr/local/bin/universaltasks
+    type: "symlink"
+  - src: universaltasks.service
+    dst: /usr/lib/systemd/system/universaltasks.service
+  - src: universaltasks.initd
+    dst: /etc/init.d/universaltasks
+    type: "config"
+    packager: apk
+scripts:
+  postinstall: ./build/after-install.sh

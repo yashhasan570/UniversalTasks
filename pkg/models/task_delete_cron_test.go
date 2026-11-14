@@ -1,0 +1,59 @@
+// Universal Tasks is a to-do list application to facilitate your life.
+// Copyright 2018-present Universal Tasks and contributors. All rights reserved.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+package models
+
+import (
+	"testing"
+	"time"
+
+	"code.universaltasks.io/api/pkg/db"
+	"code.universaltasks.io/api/pkg/events"
+	"code.universaltasks.io/api/pkg/files"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDeleteExpiredTasks(t *testing.T) {
+	// Task 51 was soft-deleted at this time in the fixtures
+	deletedAt := time.Date(2018, 12, 1, 1, 12, 4, 0, time.UTC)
+
+	t.Run("older than the retention period", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		files.InitTestFileFixtures(t)
+		events.ClearDispatchedEvents()
+
+		deleteExpiredTasks(deletedAt.Add(TrashRetention + 24*time.Hour))
+
+		db.AssertMissing(t, "tasks", map[string]interface{}{"id": 51})
+		doers := purgedTaskDoers(t)
+		require.Contains(t, doers, int64(51))
+		assert.Nil(t, doers[51], "the cron purges as the system")
+		db.AssertMissing(t, "task_reminders", map[string]interface{}{"task_id": 51})
+		db.AssertMissing(t, "label_tasks", map[string]interface{}{"task_id": 51})
+		db.AssertMissing(t, "subscriptions", map[string]interface{}{"entity_id": 51, "entity_type": SubscriptionEntityTask})
+	})
+
+	t.Run("newer than the retention period", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+
+		deleteExpiredTasks(deletedAt.Add(TrashRetention - 24*time.Hour))
+
+		db.AssertExists(t, "tasks", map[string]interface{}{"id": 51}, false)
+		db.AssertExists(t, "task_reminders", map[string]interface{}{"task_id": 51}, false)
+	})
+}
