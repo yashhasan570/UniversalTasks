@@ -10,6 +10,7 @@
 
 > The task manager you actually own. 
 
+If Universal Tasks is useful to you, please consider [supporting the project](https://universaltasks.io/support/). You can [buy a coffee](https://www.buymeacoffee.com/kolaente), [sponsor on GitHub](https://github.com/sponsors/kolaente) or buy [a sticker pack](https://universaltasks.io/stickers).
 We're also offering [a hosted version of Universal Tasks](https://universaltasks.cloud/) if you want a hassle-free solution for yourself or your team.
 If you or your company needs admin panel, audit logs or time tracking, check out [Universal Tasks Pro](https://universaltasks.io/pro/).
 
@@ -63,7 +64,3 @@ The contents of [`desktop/`](desktop/) are licensed under
 ### Unsplash Images
 
 Background images from Unsplash are distributed under the [Unsplash License](https://unsplash.com/license). The license requires giving credit to the photographer and Unsplash. See [Unsplash’s terms](https://unsplash.com/terms) for more information.
-
-## Contact
-
-Questions, problem reports or feedback? Reach us on Telegram: [@johnconstantine570](https://t.me/johnconstantine570)
